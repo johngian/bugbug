@@ -3,6 +3,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import pandas as pd
+
 from keras import Input, layers
 from keras.models import Model as KerasModel
 from keras.layers import Embedding, Flatten, Dense, Dropout, GRU
@@ -11,8 +13,9 @@ from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder
 
-from bugbug import bug_features
+from bugbug import bug_features, bugzilla
 from bugbug.model import Model
 from bugbug.nn import KerasClassifier, KerasTextToSequences
 
@@ -73,6 +76,29 @@ class TriageModel(Model):
             'long_desc_emb_sz': self.long_desc_emb_sz
         }
         self.clf = TriageClassifier(**kwargs)
+
+
+    def get_labels(self):
+        encoder = LabelEncoder()
+
+        labels_list = []
+        for bug in bugzilla.get_bugs():
+            labels_list.append({
+                'id': int(bug['id']),
+                'component': bug['component']
+            })
+
+        labels_pd = pd.DataFrame(labels_list)
+        labels_pd['component'] = encoder.fit_transform(labels_pd.component)
+
+        labels = {}
+        for _, row in labels_pd.iterrows():
+            labels[row['id']] = row['component']
+
+        return labels
+
+    def get_feature_names(self):
+        return self.extraction_pipeline.named_steps['union'].get_feature_names()
 
 
 class TriageClassifier(KerasClassifier):
