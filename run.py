@@ -19,7 +19,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--lemmatization', help='Perform lemmatization (using spaCy)', action='store_true')
     parser.add_argument('--train', help='Perform training', action='store_true')
-    parser.add_argument('--goal', help='Goal of the classifier', choices=['bug', 'regression', 'tracking', 'qaneeded', 'uplift', 'component', 'devdocneeded'], default='bug')
+    parser.add_argument('--goal',
+                        help='Goal of the classifier',
+                        choices=['bug', 'regression', 'tracking', 'qaneeded', 'uplift', 'component', 'devdocneeded', 'triage'],
+                        default='bug')
     parser.add_argument('--classify', help='Perform evaluation', action='store_true')
     parser.add_argument('--generate-sheet', help='Perform evaluation on bugs from last week and generate a csv file', action='store_true')
     args = parser.parse_args()
@@ -47,6 +50,9 @@ if __name__ == '__main__':
     elif args.goal == 'devdocneeded':
         from bugbug.models.devdocneeded import DevDocNeededModel
         model_class = DevDocNeededModel
+    elif args.goal == 'triage':
+        from bugbug.models.triage import TriageModel
+        model_class = TriageModel
 
     if args.train:
         db.download()
