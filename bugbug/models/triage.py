@@ -22,6 +22,7 @@ from bugbug.nn import KerasClassifier, KerasTextToSequences
 
 class TriageModel(Model):
     def __init__(self, *args, **kwargs):
+        super(TriageModel, self).__init__(*args, **kwargs)
         self.short_desc_maxlen = 20
         self.short_desc_vocab_size = 25000
         self.short_desc_emb_sz = 300
