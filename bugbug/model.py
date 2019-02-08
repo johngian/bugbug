@@ -63,6 +63,12 @@ class Model():
         # Calculate labels.
         y = np.array([classes[bug['id']] for bug in bugs()])
 
+
+        # HACK
+        from keras.utils import to_categorical
+        y = to_categorical(y)
+
+        
         # Extract features from the bugs.
         X = self.extraction_pipeline.fit_transform(bugs())
 

@@ -3,14 +3,14 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import numpy as np
 import pandas as pd
 
 from keras import Input, layers
 from keras.models import Model as KerasModel
 from keras.layers import Embedding, Flatten, Dense, Dropout, GRU
 from keras.layers import Bidirectional, SpatialDropout1D, GlobalMaxPooling1D
-from sklearn.compose import ColumnTransformer
-from sklearn.feature_extraction import DictVectorizer
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder
@@ -18,6 +18,31 @@ from sklearn.preprocessing import LabelEncoder
 from bugbug import bug_features, bugzilla
 from bugbug.model import Model
 from bugbug.nn import KerasClassifier, KerasTextToSequences
+from bugbug.utils import StructuredColumnTransformer
+
+
+class CategoricalExtractor(TransformerMixin):
+    def transform(self, bugs):
+        features = ['bug_reporter', 'platform', 'op_sys']
+
+        for feature in features:
+            bugs[feature] = bugs['data'].map(lambda data: data[feature]).astype('category').cat.codes
+
+        bugs = bugs.drop(columns=['data'])
+        bugs['data'] = bugs[features].to_dict('records')
+        return bugs
+
+    def fit(self, *args, **kwargs):
+        return self
+
+
+class PassthroughTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        self.X = X
+        return np.array([X.tolist()]).T
 
 
 class TriageModel(Model):
@@ -42,8 +67,11 @@ class TriageModel(Model):
 
         self.extraction_pipeline = Pipeline([
             ('bug_extractor', bug_features.BugExtractor(feature_extractors, cleanup_functions)),
-            ('union', ColumnTransformer([
-                ('categorical', DictVectorizer(), 'data'),
+            ('categorical_extractor', CategoricalExtractor()),
+            ('union', StructuredColumnTransformer([
+                ('platform', PassthroughTransformer(), 'platform'),
+                ('op_sys', PassthroughTransformer(), 'op_sys'),
+                ('bug_reporter', PassthroughTransformer(), 'bug_reporter'),
                 ('title_sequence', KerasTextToSequences(
                     self.short_desc_maxlen, self.short_desc_vocab_size), 'title'),
                 ('first_comment_sequence', KerasTextToSequences(
@@ -53,7 +81,7 @@ class TriageModel(Model):
                     analyzer='char',
                     stop_words='english',
                     ngram_range=(2, 4),
-                    max_features=2500,
+                    max_features=25000,
                     sublinear_tf=True
                 ), 'title'),
                 ('title_word_tfidf', TfidfVectorizer(
@@ -79,7 +107,6 @@ class TriageModel(Model):
             'long_desc_emb_sz': self.long_desc_emb_sz
         }
         self.clf = TriageClassifier(**kwargs)
-
 
     def get_labels(self):
         encoder = LabelEncoder()
@@ -115,7 +142,7 @@ class TriageClassifier(KerasClassifier):
         self.long_desc_emb_sz = kwargs.pop('long_desc_emb_sz')
 
     def model_creator(self, X, y):
-        short_desc_inp = Input(shape=(self.short_desc_maxlen,), name='short_desc_inp')
+        short_desc_inp = Input(shape=(self.short_desc_maxlen,), name='title_sequence')
         short_desc_emb = Embedding(self.short_desc_vocab_size, self.short_desc_emb_sz)(short_desc_inp)
         short_desc_emb = SpatialDropout1D(0.2)(short_desc_emb)
         short_desc_encoded = Bidirectional(
@@ -123,7 +150,7 @@ class TriageClassifier(KerasClassifier):
         )(short_desc_emb)
         short_desc_encoded = GlobalMaxPooling1D()(short_desc_encoded)
 
-        long_desc_inp = Input(shape=(self.long_desc_maxlen,), name='long_desc_inp')
+        long_desc_inp = Input(shape=(self.long_desc_maxlen,), name='first_comment_sequence')
         long_desc_emb = Embedding(self.long_desc_vocab_size, self.long_desc_emb_sz)(long_desc_inp)
         long_desc_emb = SpatialDropout1D(0.25)(long_desc_emb)
         long_desc_encoded = Bidirectional(
@@ -131,7 +158,7 @@ class TriageClassifier(KerasClassifier):
         )(long_desc_emb)
         long_desc_encoded = GlobalMaxPooling1D()(long_desc_encoded)
 
-        rep_platform_inp = Input(shape=(1,), name='rep_platform_inp')
+        rep_platform_inp = Input(shape=(1,), name='platform')
         rep_platform_emb = Embedding(input_dim=14, output_dim=25, input_length=1)(
             rep_platform_inp
         )
@@ -139,13 +166,13 @@ class TriageClassifier(KerasClassifier):
         rep_platform_emb = Flatten()(rep_platform_emb)
         rep_platform_emb = Dropout(0.45)(rep_platform_emb)
 
-        op_sys_inp = Input(shape=(1,), name='op_sys_inp')
+        op_sys_inp = Input(shape=(1,), name='op_sys')
         op_sys_emb = Embedding(input_dim=48, output_dim=50, input_length=1)(op_sys_inp)
         op_sys_emb = SpatialDropout1D(0.1)(op_sys_emb)
         op_sys_emb = Flatten()(op_sys_emb)
         op_sys_emb = Dropout(0.45)(op_sys_emb)
 
-        reporter_inp = Input(shape=(1,), name='reporter_inp')
+        reporter_inp = Input(shape=(1,), name='bug_reporter')
         reporter_emb = Embedding(input_dim=46544, output_dim=100, input_length=1)(
             reporter_inp
         )
@@ -153,11 +180,11 @@ class TriageClassifier(KerasClassifier):
         reporter_emb = Flatten()(reporter_emb)
         reporter_emb = Dropout(0.5)(reporter_emb)
 
-        tfidf_word_inp = Input(shape=(X['title_word_tfidf'].shape[1],), name='tfidf_word_inp')
+        tfidf_word_inp = Input(shape=(X['title_word_tfidf'].shape[1],), name='title_word_tfidf')
         tfidf_word = Dense(600, activation='relu')(tfidf_word_inp)
         tfidf_word = Dropout(0.5)(tfidf_word)
 
-        tfidf_char_inp = Input(shape=(X['title_char_tfidf'].shape[1],), name='tfidf_char_inp')
+        tfidf_char_inp = Input(shape=(X['title_char_tfidf'].shape[1],), name='title_char_tfidf')
         tfidf_char = Dense(500, activation='relu')(tfidf_char_inp)
         tfidf_char = Dropout(0.5)(tfidf_char)
 
